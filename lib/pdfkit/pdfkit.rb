@@ -27,6 +27,10 @@ class PDFKit
     @options = PDFKit.configuration.default_options.merge(options)
     @options.delete(:quiet) if PDFKit.configuration.verbose?
     @options.merge! find_options_in_meta(url_file_or_html) unless source.url?
+
+    @input_options = @options.delete(:input_options) || {}
+    @input_options = normalize_options(@input_options)
+
     @options = normalize_options(@options)
 
     raise NoExecutableError.new unless File.exists?(PDFKit.configuration.wkhtmltopdf)
@@ -36,13 +40,16 @@ class PDFKit
     args = @options.to_a.flatten.compact
     shell_escaped_command = [executable, shell_escape_for_os(args)].join ' '
 
+    input_args = @input_options.to_a.flatten.compact
+    shell_escaped_input_args = shell_escape_for_os(input_args)
+
     # In order to allow for URL parameters (e.g. https://www.google.com/search?q=pdfkit) we do
     # not escape the source. The user is responsible for ensuring that no vulnerabilities exist
     # in the source. Please see https://github.com/pdfkit/pdfkit/issues/164.
     input_for_command = @source.to_input_for_command
     output_for_command = path ? Shellwords.shellescape(path) : '-'
 
-    "#{shell_escaped_command} #{input_for_command} #{output_for_command}"
+    "#{shell_escaped_command} #{input_for_command} #{shell_escaped_input_args} #{output_for_command}"
   end
 
   def executable
