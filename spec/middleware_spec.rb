@@ -21,6 +21,35 @@ describe PDFKit::Middleware do
   end
 
   describe "#call" do
+
+    describe 'threadsafety' do
+      before { mock_app }
+      it 'is threadsafe' do
+        n = 30
+        extensions = Array.new(n) { rand > 0.5 ? 'html' : 'pdf' }
+        actual_content_types = Hash.new
+
+        threads = (0...n).map { |i|
+          Thread.new do
+            resp = get("http://www.example.org/public/test.#{extensions[i]}")
+            actual_content_types[i] = resp.content_type
+          end
+        }
+
+        threads.each(&:join)
+
+        extensions.each_with_index do |extension, index|
+          result = actual_content_types[index]
+          case extension
+          when 'html', 'txt', 'csv'
+            expect(result).to eq("text/#{extension}")
+          when 'pdf'
+            expect(result).to eq('application/pdf')
+          end
+        end
+      end
+    end
+
     describe "caching" do
       let(:headers) do
         {
@@ -236,22 +265,22 @@ describe PDFKit::Middleware do
       end
 
       describe "saving generated pdf to disk" do
-	before do
+        before do
           #make sure tests don't find an old test_save.pdf
           File.delete('spec/test_save.pdf') if File.exists?('spec/test_save.pdf')
           expect(File.exists?('spec/test_save.pdf')).to eq(false)
-	end
+        end
 
         context "when header PDFKit-save-pdf is present" do
           it "saves the .pdf to disk" do
-	    headers = { 'PDFKit-save-pdf' => 'spec/test_save.pdf' }
+            headers = { 'PDFKit-save-pdf' => 'spec/test_save.pdf' }
             mock_app({}, {only: '/public'}, headers)
-	    get 'http://www.example.org/public/test_save.pdf'
+            get 'http://www.example.org/public/test_save.pdf'
             expect(File.exists?('spec/test_save.pdf')).to eq(true)
-	  end
+          end
 
           it "does not raise when target directory does not exist" do
-	    headers = { 'PDFKit-save-pdf' => '/this/dir/does/not/exist/spec/test_save.pdf' }
+            headers = { 'PDFKit-save-pdf' => '/this/dir/does/not/exist/spec/test_save.pdf' }
             mock_app({}, {only: '/public'}, headers)
             expect {
               get 'http://www.example.com/public/test_save.pdf'
@@ -262,15 +291,60 @@ describe PDFKit::Middleware do
         context "when header PDFKit-save-pdf is not present" do
           it "does not saved the .pdf to disk" do
             mock_app({}, {only: '/public'}, {} )
-	    get 'http://www.example.org/public/test_save.pdf'
+            get 'http://www.example.org/public/test_save.pdf'
             expect(File.exists?('spec/test_save.pdf')).to eq(false)
+          end
+        end
+      end
+
+      describe 'javascript delay' do
+        context 'when header PDFKit-javascript-delay is present' do
+          it 'passes header value through to PDFKit initialiser' do
+            expect(PDFKit).to receive(:new).with('Hello world!', {
+              root_url: 'http://www.example.com/', protocol: 'http', javascript_delay: 4321
+            }).and_call_original
+
+            headers = { 'PDFKit-javascript-delay' => '4321' }
+            mock_app({}, { only: '/public' }, headers)
+            get 'http://www.example.com/public/test_save.pdf'
+          end
+
+          it 'handles invalid content in header' do
+            expect(PDFKit).to receive(:new).with('Hello world!', {
+              root_url: 'http://www.example.com/', protocol: 'http', javascript_delay: 0
+            }).and_call_original
+
+            headers = { 'PDFKit-javascript-delay' => 'invalid' }
+            mock_app({}, { only: '/public' }, headers)
+            get 'http://www.example.com/public/test_save.pdf'
+          end
+
+          it 'overrides default option' do
+            expect(PDFKit).to receive(:new).with('Hello world!', {
+              root_url: 'http://www.example.com/', protocol: 'http', javascript_delay: 4321
+            }).and_call_original
+
+            headers = { 'PDFKit-javascript-delay' => '4321' }
+            mock_app({ javascript_delay: 1234 }, { only: '/public' }, headers)
+            get 'http://www.example.com/public/test_save.pdf'
+          end
+        end
+
+        context 'when header PDFKit-javascript-delay is not present' do
+          it 'passes through default option' do
+            expect(PDFKit).to receive(:new).with('Hello world!', {
+              root_url: 'http://www.example.com/', protocol: 'http', javascript_delay: 1234
+            }).and_call_original
+
+            mock_app({ javascript_delay: 1234 }, { only: '/public' }, { })
+            get 'http://www.example.com/public/test_save.pdf'
           end
         end
       end
     end
 
-  describe "remove .pdf from PATH_INFO and REQUEST_URI" do
-    before { mock_app }
+    describe "remove .pdf from PATH_INFO and REQUEST_URI" do
+      before { mock_app }
 
       context "matching" do
 
@@ -319,80 +393,37 @@ describe PDFKit::Middleware do
     end
   end
 
-  describe "#translate_paths" do
+  describe "#root_url and #protocol" do
     before do
       @pdf = PDFKit::Middleware.new({})
       @env = { 'REQUEST_URI' => 'http://example.com/document.pdf', 'rack.url_scheme' => 'http', 'HTTP_HOST' => 'example.com' }
     end
 
-    it "correctly parses relative url with single quotes" do
-      @body = %{<html><head><link href='/stylesheets/application.css' media='screen' rel='stylesheet' type='text/css' /></head><body><img alt='test' src="/test.png" /></body></html>}
-      body = @pdf.send :translate_paths, @body, @env
-      expect(body).to eq("<html><head><link href='http://example.com/stylesheets/application.css' media='screen' rel='stylesheet' type='text/css' /></head><body><img alt='test' src=\"http://example.com/test.png\" /></body></html>")
-    end
+    context 'when root_url is not configured' do
+      it "infers the root_url and protocol from the environment" do
+        root_url = @pdf.send(:root_url, @env)
+        protocol = @pdf.send(:protocol, @env)
 
-    it "correctly parses relative url with double quotes" do
-      @body = %{<link href="/stylesheets/application.css" media="screen" rel="stylesheet" type="text/css" />}
-      body = @pdf.send :translate_paths, @body, @env
-      expect(body).to eq("<link href=\"http://example.com/stylesheets/application.css\" media=\"screen\" rel=\"stylesheet\" type=\"text/css\" />")
-    end
-
-    it "correctly parses relative url with double quotes" do
-      @body = %{<link href='//fonts.googleapis.com/css?family=Open+Sans:400,600' rel='stylesheet' type='text/css'>}
-      body = @pdf.send :translate_paths, @body, @env
-      expect(body).to eq("<link href='http://fonts.googleapis.com/css?family=Open+Sans:400,600' rel='stylesheet' type='text/css'>")
-    end
-
-    it "correctly parses multiple tags where first one is root url" do
-      @body = %{<a href='/'><img src='/logo.jpg' ></a>}
-      body = @pdf.send :translate_paths, @body, @env
-      expect(body).to eq "<a href='http://example.com/'><img src='http://example.com/logo.jpg' ></a>"
-    end
-
-    it "returns the body even if there are no valid substitutions found" do
-      @body = "NO MATCH"
-      body = @pdf.send :translate_paths, @body, @env
-      expect(body).to eq("NO MATCH")
-    end
-  end
-
-  describe "#translate_paths with root_url configuration" do
-    before do
-      @pdf = PDFKit::Middleware.new({})
-      @env = { 'REQUEST_URI' => 'http://example.com/document.pdf', 'rack.url_scheme' => 'http', 'HTTP_HOST' => 'example.com' }
-      PDFKit.configure do |config|
-        config.root_url = "http://example.net/"
+        expect(root_url).to eq('http://example.com/')
+        expect(protocol).to eq('http')
       end
     end
 
-    it "adds the root_url" do
-      @body = %{<html><head><link href='/stylesheets/application.css' media='screen' rel='stylesheet' type='text/css' /></head><body><img alt='test' src="/test.png" /></body></html>}
-      body = @pdf.send :translate_paths, @body, @env
-      expect(body).to eq("<html><head><link href='http://example.net/stylesheets/application.css' media='screen' rel='stylesheet' type='text/css' /></head><body><img alt='test' src=\"http://example.net/test.png\" /></body></html>")
-    end
+    context 'when root_url is configured' do
+      before do
+        PDFKit.configuration.root_url = 'http://example.net/'
+      end
+      after do
+        PDFKit.configuration.root_url = nil
+      end
 
-    after do
-      PDFKit.configure do |config|
-        config.root_url = nil
+      it "takes the root_url from the configuration, and infers the protocol from the environment" do
+        root_url = @pdf.send(:root_url, @env)
+        protocol = @pdf.send(:protocol, @env)
+
+        expect(root_url).to eq('http://example.net/')
+        expect(protocol).to eq('http')
       end
     end
-  end
-
-  it "does not get stuck rendering each request as pdf" do
-    mock_app
-    # false by default. No requests.
-    expect(@app.send(:rendering_pdf?)).to eq(false)
-
-    # Remain false on a normal request
-    get 'http://www.example.org/public/file'
-    expect(@app.send(:rendering_pdf?)).to eq(false)
-
-    # Return true on a pdf request.
-    get 'http://www.example.org/public/file.pdf'
-    expect(@app.send(:rendering_pdf?)).to eq(true)
-
-    # Restore to false on any non-pdf request.
-    get 'http://www.example.org/public/file'
-    expect(@app.send(:rendering_pdf?)).to eq(false)
   end
 end

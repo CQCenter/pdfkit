@@ -3,23 +3,23 @@ require 'spec_helper'
 describe PDFKit::Configuration do
   subject { PDFKit::Configuration.new }
   describe "#wkhtmltopdf" do
-    it "can be configured" do
-      subject.wkhtmltopdf = '/my/bin/wkhtmltopdf'
-      expect(subject.wkhtmltopdf).to eql '/my/bin/wkhtmltopdf'
-    end
-
-    # This test documents existing functionality. Feel free to fix.
-    it "can be poorly configured" do
-      subject.wkhtmltopdf = 1234
-      expect(subject.wkhtmltopdf).to eql 1234
-    end
-
     context "when not explicitly configured" do
       it "detects the existance of bundler" do
         # Test assumes bundler is installed in your test environment
         expect(subject).to receive(:`).with('bundle exec which wkhtmltopdf').and_return('c:\windows\path.exe')
         subject.wkhtmltopdf
       end
+    end
+  end
+
+  describe "#executable" do
+    it "returns wkhtmltopdf by default" do
+      expect(subject.executable).to eql subject.wkhtmltopdf
+    end
+
+    it "uses xvfb-run wrapper when option of using xvfb is configured" do
+      expect(subject).to receive(:using_xvfb?).and_return(true)
+      expect(subject.executable).to include 'xvfb-run'
     end
   end
 
@@ -61,6 +61,22 @@ describe PDFKit::Configuration do
     it "is configurable" do
       subject.meta_tag_prefix = 'aDifferentPrefix-'
       expect(subject.meta_tag_prefix).to eql 'aDifferentPrefix-'
+    end
+  end
+
+  describe "#using_xvfb?" do
+    it "can be configured to true" do
+      subject.use_xvfb = true
+      expect(subject.using_xvfb?).to eql true
+    end
+
+    it "defaults to false" do
+      expect(subject.using_xvfb?).to eql false
+    end
+
+    it "can be configured to false" do
+      subject.use_xvfb = false
+      expect(subject.using_xvfb?).to eql false
     end
   end
 

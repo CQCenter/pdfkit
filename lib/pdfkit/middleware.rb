@@ -9,6 +9,10 @@ class PDFKit
     end
 
     def call(env)
+      dup._call(env)
+    end
+
+    def _call(env)
       @request    = Rack::Request.new(env)
       @render_pdf = false
 
@@ -18,7 +22,16 @@ class PDFKit
       if rendering_pdf? && headers['Content-Type'] =~ /text\/html|application\/xhtml\+xml/
         body = response.respond_to?(:body) ? response.body : response.join
         body = body.join if body.is_a?(Array)
-        body = PDFKit.new(translate_paths(body, env), @options).to_pdf
+
+        root_url = root_url(env)
+        protocol = protocol(env)
+        options = @options.merge(root_url: root_url, protocol: protocol)
+
+        if headers['PDFKit-javascript-delay']
+          options.merge!(javascript_delay: headers.delete('PDFKit-javascript-delay').to_i)
+        end
+
+        body = PDFKit.new(body, options).to_pdf
         response = [body]
 
         if headers['PDFKit-save-pdf']
@@ -32,8 +45,8 @@ class PDFKit
           headers.delete('Cache-Control')
         end
 
-        headers['Content-Length']         = (body.respond_to?(:bytesize) ? body.bytesize : body.size).to_s
-        headers['Content-Type']           = 'application/pdf'
+        headers['Content-Length'] = (body.respond_to?(:bytesize) ? body.bytesize : body.size).to_s
+        headers['Content-Type']   = 'application/pdf'
       end
 
       [status, headers, response]
@@ -41,22 +54,12 @@ class PDFKit
 
     private
 
-    # Change relative paths to absolute, and relative protocols to absolute protocols
-    def translate_paths(body, env)
-      body = translate_relative_paths(body, env)
-      translate_relative_protocols(body, env)
+    def root_url(env)
+      PDFKit.configuration.root_url || "#{env['rack.url_scheme']}://#{env['HTTP_HOST']}/"
     end
 
-    def translate_relative_paths(body, env)
-      root = PDFKit.configuration.root_url || "#{env['rack.url_scheme']}://#{env['HTTP_HOST']}/"
-      # Try out this regexp using rubular http://rubular.com/r/hiAxBNX7KE
-      body.gsub(/(href|src)=(['"])\/([^\/"']([^\"']*|[^"']*))?['"]/, "\\1=\\2#{root}\\3\\2")
-    end
-
-    def translate_relative_protocols(body, env)
-      protocol = "#{env['rack.url_scheme']}://"
-      # Try out this regexp using rubular http://rubular.com/r/0Ohk0wFYxV
-      body.gsub(/(href|src)=(['"])\/\/([^\"']*|[^"']*)['"]/, "\\1=\\2#{protocol}\\3\\2")
+    def protocol(env)
+      env['rack.url_scheme']
     end
 
     def rendering_pdf?
@@ -65,20 +68,18 @@ class PDFKit
 
     def render_as_pdf?
       request_path = @request.path
-      request_path_is_pdf = request_path.match(%r{\.pdf$})
+      return false unless request_path.end_with?('.pdf')
 
-      if request_path_is_pdf && @conditions[:only]
+      if @conditions[:only]
         conditions_as_regexp(@conditions[:only]).any? do |pattern|
-          request_path =~ pattern
+          pattern === request_path
         end
-      elsif request_path_is_pdf && @conditions[:except]
-        conditions_as_regexp(@conditions[:except]).each do |pattern|
-          return false if request_path =~ pattern
+      elsif @conditions[:except]
+        conditions_as_regexp(@conditions[:except]).none? do |pattern|
+          pattern === request_path
         end
-
-        return true
       else
-        request_path_is_pdf
+        true
       end
     end
 
@@ -99,8 +100,8 @@ class PDFKit
     end
 
     def conditions_as_regexp(conditions)
-      [conditions].flatten.map do |pattern|
-        pattern.is_a?(Regexp) ? pattern : Regexp.new('^' + pattern)
+      Array(conditions).map do |pattern|
+        pattern.is_a?(Regexp) ? pattern : Regexp.new("^#{pattern}")
       end
     end
   end
