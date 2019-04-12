@@ -42,7 +42,7 @@ class PDFKit
     shell_escaped_command = [executable, OS::shell_escape_for_os(args)].join ' '
 
     input_args = @input_options.to_a.flatten.compact
-    shell_escaped_input_args = shell_escape_for_os(input_args)
+    shell_escaped_input_args = OS::shell_escape_for_os(input_args)
 
     # In order to allow for URL parameters (e.g. https://www.google.com/search?q=pdfkit) we do
     # not escape the source. The user is responsible for ensuring that no vulnerabilities exist
