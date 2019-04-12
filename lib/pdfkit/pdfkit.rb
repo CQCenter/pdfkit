@@ -29,7 +29,7 @@ class PDFKit
     @root_url = options.delete(:root_url)
     @protocol = options.delete(:protocol)
 
-    @input_options = @options.delete(:input_options) || {}
+    @input_options = options.delete(:input_options) || {}
     @input_options = normalize_options(@input_options)
 
     @renderer = WkHTMLtoPDF.new options
